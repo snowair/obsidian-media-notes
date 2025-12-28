@@ -69,18 +69,10 @@ export const formatTimestamp = (timestamp: number | undefined) => {
 
 const convertTimestampToSeconds = (timestamp: string) => {
 	const timestampParts = timestamp.split(":").map(Number);
-	let seconds = 0;
-	if (timestampParts.length === 3) {
-		seconds += timestampParts[0] * 3600;
-		seconds += timestampParts[1] * 60;
-		seconds += timestampParts[2];
-	} else if (timestampParts.length === 2) {
-		seconds += timestampParts[0] * 60;
-		seconds += timestampParts[1];
-	} else {
-		seconds += timestampParts[0];
-	}
-	return seconds;
+	let seekTime = 0;
+    if (timestampParts.length === 3) seekTime = timestampParts[0] * 3600 + timestampParts[1] * 60 + timestampParts[2];
+    else if (timestampParts.length === 2) seekTime = timestampParts[0] * 60 + timestampParts[1];
+	return seekTime;
 };
 
 const getMediaLinkFromFrontmatter = (frontmatter: Record<string, string>) => {
