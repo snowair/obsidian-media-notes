@@ -45,7 +45,7 @@ const DEFAULT_SETTINGS: MediaNotesPluginSettings = {
 	pauseOnTimestampInsert: false,
 	displayProgressBar: true,
 	displayTimestamp: true,
-	timestampOffsetSeconds: 6,
+	timestampOffsetSeconds: 0,
 	backgroundColor: "#000000",
 	progressBarColor: "#FF0000",
 	timestampTemplate: "[{ts}]({link})\n",
@@ -57,14 +57,11 @@ const mediaParentContainerVerticalClass = "media-container-parent-vertical";
 
 export const formatTimestamp = (timestamp: number | undefined) => {
 	if (timestamp === undefined) return "";
-	const hours = Math.floor(timestamp / 3600);
-	const minutes = Math.floor((timestamp - hours * 3600) / 60);
-	const seconds = Math.floor(timestamp - hours * 3600 - minutes * 60);
-	const formattedSeconds = seconds < 10 ? `0${seconds}` : seconds;
-	const formattedMinutes = minutes < 10 ? `0${minutes}` : minutes;
-	return `${
-		hours > 0 ? hours + ":" : ""
-	}${formattedMinutes}:${formattedSeconds}`;
+	const minutes = Math.floor(timestamp / 60);
+	const seconds = Math.floor(timestamp % 60);
+	const millis = Math.floor((timestamp % 1) * 1000);
+	const formatted = `[${minutes}:${seconds.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}]`;
+	return formatted
 };
 
 const convertTimestampToSeconds = (timestamp: string) => {
@@ -270,32 +267,10 @@ export default class MediaNotesPlugin extends Plugin {
 				const timestamp =
 					await player.ytRef.current?.internalPlayer?.getCurrentTime();
 				if (!timestamp) return;
-				const offsetTimestamp =
-					timestamp - this.settings.timestampOffsetSeconds >= 0
-						? timestamp - this.settings.timestampOffsetSeconds
-						: 0;
-				const formattedTimestamp = formatTimestamp(offsetTimestamp);
-				const timestampTemplate = this.settings.timestampTemplate;
-				let timestampSnippet = timestampTemplate.replace(
-					"{ts}",
-					formattedTimestamp
-				);
-				const videoUrl =
-					await player.ytRef.current?.internalPlayer?.getVideoUrl();
+				
+				const formattedTimestamp = formatTimestamp(timestamp);
+				const timestampSnippet = formattedTimestamp.replace(/\\n/g, "\n");
 
-				if (videoUrl) {
-					// for some reason, the t= param is wrong in the videoUrl from getVidelUrl. fix it
-					const fixedVideoUrl = new URL(videoUrl);
-					fixedVideoUrl.searchParams.set(
-						"t",
-						Math.floor(offsetTimestamp).toString()
-					);
-					timestampSnippet = timestampSnippet.replace(
-						"{link}",
-						`${fixedVideoUrl}`
-					);
-				}
-				timestampSnippet = timestampSnippet.replace(/\\n/g, "\n");
 				editor.replaceSelection(timestampSnippet);
 				if (this.settings.pauseOnTimestampInsert) {
 					const player = this.getActiveViewYoutubePlayer(view);
