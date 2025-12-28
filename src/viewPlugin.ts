@@ -13,7 +13,7 @@ class ClickHandlerPlugin {
 		const element = event.target as HTMLElement;
 		if (element.matches("span.cm-link, span.cm-link *")) {
 			const textContent = element.textContent;
-			const timestampRegex = /^(\d+:)?[0-5]?\d:[0-5]\d$/;
+			const timestampRegex =  /(\d+):(\d{1,2})(?::(\d{1,2}))?(?:\.(\d{1,3}))?/g;
 			if (!textContent) return;
 			if (timestampRegex.test(textContent)) {
 				const isHandled = this.handleTimestampClick(textContent);
