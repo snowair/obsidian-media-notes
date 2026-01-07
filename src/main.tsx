@@ -60,7 +60,7 @@ export const formatTimestamp = (timestamp: number | undefined) => {
 	const minutes = Math.floor(timestamp / 60);
 	const seconds = Math.floor(timestamp % 60);
 	const millis = Math.floor((timestamp % 1) * 1000);
-	const formatted = `[${minutes}:${seconds.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}]`;
+	const formatted = `[${minutes}:${seconds.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}] `;
 	return formatted
 };
 
