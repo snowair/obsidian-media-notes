@@ -45,7 +45,7 @@ media_link: [[附件/采访.mp4]]
 ---
 ```
 
-也支持 `file://` 绝对路径、普通绝对路径（如 `/Users/me/Documents/audio.mp3`）、`app://` 资源路径和直链 `https://.../audio.mp3`。 vault 外的绝对路径通过 `file://` 加载，个别 Obsidian 配置可能会阻止该文件协议，此时建议先把媒体放进 vault。
+也支持 `file://` 绝对路径、普通绝对路径（如 `/Users/me/Documents/audio.mp3`）、`app://` 资源路径和直链 `https://.../audio.mp3`。vault 外的文件由插件用 Node 读取并转成 blob URL 播放（Electron 会拦截裸 `file://`），因此不需要先把媒体复制进 vault。太大的视频文件会整块读进内存，建议放在 vault 内以走 `app://`。
 
 - 音频：`.mp3` `.m4a` `.aac` `.wav` `.flac` `.opus` `.oga` `.mp4a`
 - 视频：`.mp4` `.m4v` `.mov` `.webm` `.ogv` `.mkv` `.avi`

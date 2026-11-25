@@ -3,6 +3,10 @@ import { MediaFrame } from "./components/media-frame";
 import { AppProvider } from "./app-context";
 import { createMediaController, MediaController } from "./media-controller";
 import {
+	createExternalMediaUrl,
+	revokeExternalMediaUrl,
+} from "./local-media";
+import {
 	classifyMedia,
 	getMediaId,
 	getInitSecondsFromLink,
@@ -89,6 +93,7 @@ interface MediaPlayer {
 	ytRef: React.RefObject<YouTube>;
 	htmlMediaRef: React.RefObject<HTMLMediaElement>;
 	eventEmitter: EventEmitter;
+	externalPath?: string;
 }
 
 export default class MediaNotesPlugin extends Plugin {
@@ -138,6 +143,16 @@ export default class MediaNotesPlugin extends Plugin {
 		});
 	};
 
+	cleanupPlayer = (playerId: string) => {
+		const player = this.players[playerId];
+		if (!player) return;
+		this.savePlayerTimestamp(playerId);
+		if (player.externalPath) {
+			revokeExternalMediaUrl(player.externalPath);
+		}
+		delete this.players[playerId];
+	};
+
 	renderPlayerInView = (markdownView: MarkdownView) => {
 		// @ts-ignore TS2339
 		const frontmatter = (parseYaml(markdownView.rawFrontmatter) ??
@@ -147,12 +162,24 @@ export default class MediaNotesPlugin extends Plugin {
 		if (frontmatter && rawLink) {
 			const mediaLink = String(rawLink);
 			const mediaKind = classifyMedia(mediaLink);
-			const src =
+			let src =
 				mediaKind === "youtube"
 					? null
 					: mediaKind
 					? resolveMediaSource(this.app, mediaLink)
 					: null;
+			// file:// is blocked by Electron's renderer; read external files
+			// with Node and hand the player a blob URL instead.
+			let externalPath: string | undefined;
+			if (src && src.startsWith("file://")) {
+				try {
+					externalPath = decodeURIComponent(new URL(src).pathname);
+					src = createExternalMediaUrl(externalPath);
+				} catch (e) {
+					console.error(e);
+					src = null;
+				}
+			}
 			const container = markdownView.containerEl;
 			const existingPlayerComponent = container.querySelector(
 				"." + mediaNotesContainerClass
@@ -164,8 +191,7 @@ export default class MediaNotesPlugin extends Plugin {
 					const playerId =
 						existingPlayerComponent.getAttribute("data-player-id") ??
 						"";
-					this.savePlayerTimestamp(playerId);
-					delete this.players[playerId];
+					this.cleanupPlayer(playerId);
 					existingPlayerComponent.remove();
 				}
 				return;
@@ -182,8 +208,7 @@ export default class MediaNotesPlugin extends Plugin {
 				}
 				// remove the existing player
 				existingPlayerComponent.remove();
-				this.savePlayerTimestamp(playerId);
-				delete this.players[playerId];
+				this.cleanupPlayer(playerId);
 			}
 
 			const div = document.createElement("div");
@@ -218,6 +243,7 @@ export default class MediaNotesPlugin extends Plugin {
 				mediaKind,
 				mediaLink,
 				eventEmitter,
+				externalPath,
 			};
 
 			const mediaId = getMediaId(mediaLink);
@@ -261,8 +287,7 @@ export default class MediaNotesPlugin extends Plugin {
 			if (div) {
 				// unmount
 				const playerId = div.getAttribute("data-player-id") ?? "";
-				this.savePlayerTimestamp(playerId);
-				delete this.players[playerId];
+				this.cleanupPlayer(playerId);
 				div.remove();
 			}
 		}
@@ -541,8 +566,7 @@ export default class MediaNotesPlugin extends Plugin {
 			// unmount
 			const playerId = div.getAttribute("data-player-id") ?? "";
 			console.log("save timestamp before reloading!");
-			this.savePlayerTimestamp(playerId);
-			delete this.players[playerId];
+			this.cleanupPlayer(playerId);
 			div.remove();
 		}
 	}
