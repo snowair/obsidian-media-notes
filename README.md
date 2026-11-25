@@ -22,3 +22,34 @@ styles.css
 ```
 你的库库名/.obsidian/plugins/media-notes/
 ```
+
+# 支持的媒体
+
+在笔记 frontmatter 中写 `media_link`（或 `media`）。插件会根据链接自动选择播放器：
+
+```yaml
+---
+media_link: https://www.youtube.com/watch?v=dQw4w9WgXcQ
+---
+```
+
+```yaml
+---
+media_link: 附件/英语听力.mp3
+---
+```
+
+```yaml
+---
+media_link: [[附件/采访.mp4]]
+---
+```
+
+也支持 `file://` 绝对路径、普通绝对路径（如 `/Users/me/Documents/audio.mp3`）、`app://` 资源路径和直链 `https://.../audio.mp3`。 vault 外的绝对路径通过 `file://` 加载，个别 Obsidian 配置可能会阻止该文件协议，此时建议先把媒体放进 vault。
+
+- 音频：`.mp3` `.m4a` `.aac` `.wav` `.flac` `.opus` `.oga` `.mp4a`
+- 视频：`.mp4` `.m4v` `.mov` `.webm` `.ogv` `.mkv` `.avi`
+
+音频使用浏览器原生控件；视频与 YouTube 一样使用插件的快捷键、进度条和时间戳浮层。链接里带 `?t=30` 或 `#t=1m30s` 会从指定时间开始播放；本地文件的 `t` 参数同样有效。
+
+所有命令（Insert Timestamp、Play/Pause、Fast Forward、Rewind、Speed up、Slow down）对 YouTube 和本地媒体都生效。点击笔记中的时间戳可以跳转播放位置。

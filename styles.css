@@ -18,6 +18,18 @@ If your plugin does not need CSS, delete this file.
 	width: 100%;
 }
 
+.local-media-player {
+	display: block;
+	height: 100%;
+	width: 100%;
+	object-fit: contain;
+}
+
+.local-audio-player {
+	min-height: 54px;
+	object-fit: initial;
+}
+
 .media-top-container {
 	height: 100%;
 	width: 100%;
@@ -53,7 +65,8 @@ If your plugin does not need CSS, delete this file.
 	max-width: none;
 }
 
-.media-container-parent-vertical .youtube-iframe {
+.media-container-parent-vertical .youtube-iframe,
+.media-container-parent-vertical .local-media-player {
 	max-width: none;
 }
 

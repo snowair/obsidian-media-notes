@@ -1,6 +1,13 @@
 import { createRoot } from "react-dom/client";
-import { MediaFrame, getVideoId } from "./components/media-frame";
+import { MediaFrame } from "./components/media-frame";
 import { AppProvider } from "./app-context";
+import { createMediaController, MediaController } from "./media-controller";
+import {
+	classifyMedia,
+	getMediaId,
+	getInitSecondsFromLink,
+	resolveMediaSource,
+} from "./media-utils";
 import {
 	App,
 	Editor,
@@ -76,18 +83,30 @@ const getMediaLinkFromFrontmatter = (frontmatter: Record<string, string>) => {
 	return frontmatter["media_link"] || frontmatter["media"];
 };
 
+interface MediaPlayer {
+	mediaLink: string;
+	mediaKind: string;
+	ytRef: React.RefObject<YouTube>;
+	htmlMediaRef: React.RefObject<HTMLMediaElement>;
+	eventEmitter: EventEmitter;
+}
+
 export default class MediaNotesPlugin extends Plugin {
 	settings: MediaNotesPluginSettings;
 
 	players: {
-		[id: string]: {
-			ytRef: React.RefObject<YouTube>;
-			mediaLink: string;
-			eventEmitter: EventEmitter;
-		};
+		[id: string]: MediaPlayer;
 	};
 
-	getActiveViewYoutubePlayer = (view: View) => {
+	getController = (player: MediaPlayer): MediaController | null => {
+		return createMediaController(
+			player.mediaKind,
+			player.ytRef,
+			player.htmlMediaRef
+		);
+	};
+
+	getActiveViewPlayer = (view: View): MediaPlayer | null | undefined => {
 		// const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!view) return;
 		const existingPlayer = view.containerEl.querySelector(
@@ -104,19 +123,19 @@ export default class MediaNotesPlugin extends Plugin {
 	savePlayerTimestamp = (playerId: string) => {
 		const player = this.players[playerId];
 		if (!player) return;
-		player.ytRef.current?.internalPlayer
-			?.getCurrentTime()
-			.then((timestamp: number) => {
-				const mediaId = getVideoId(player.mediaLink);
-				if (!mediaId) return;
-				this.settings.mediaData[mediaId] = {
-					mediaLink: player.mediaLink,
-					lastUpdated: new Date().toISOString(),
-					lastTimestampSeconds: timestamp,
-				};
-				this.saveSettings();
-				this.loadSettings();
-			});
+		const controller = this.getController(player);
+		if (!controller) return;
+		controller.getCurrentTime().then((timestamp) => {
+			const mediaId = getMediaId(player.mediaLink);
+			if (!mediaId) return;
+			this.settings.mediaData[mediaId] = {
+				mediaLink: player.mediaLink,
+				lastUpdated: new Date().toISOString(),
+				lastTimestampSeconds: timestamp,
+			};
+			this.saveSettings();
+			this.loadSettings();
+		});
 	};
 
 	renderPlayerInView = (markdownView: MarkdownView) => {
@@ -124,11 +143,33 @@ export default class MediaNotesPlugin extends Plugin {
 		const frontmatter = (parseYaml(markdownView.rawFrontmatter) ??
 			{}) as Record<string, string>;
 		// if there's a media_link
-		if (frontmatter && getMediaLinkFromFrontmatter(frontmatter)) {
+		const rawLink = getMediaLinkFromFrontmatter(frontmatter);
+		if (frontmatter && rawLink) {
+			const mediaLink = String(rawLink);
+			const mediaKind = classifyMedia(mediaLink);
+			const src =
+				mediaKind === "youtube"
+					? null
+					: mediaKind
+					? resolveMediaSource(this.app, mediaLink)
+					: null;
 			const container = markdownView.containerEl;
 			const existingPlayerComponent = container.querySelector(
 				"." + mediaNotesContainerClass
 			);
+
+			// Unknown media type or a missing vault file: don't render a player.
+			if (!mediaKind || (mediaKind !== "youtube" && !src)) {
+				if (existingPlayerComponent) {
+					const playerId =
+						existingPlayerComponent.getAttribute("data-player-id") ??
+						"";
+					this.savePlayerTimestamp(playerId);
+					delete this.players[playerId];
+					existingPlayerComponent.remove();
+				}
+				return;
+			}
 
 			if (existingPlayerComponent) {
 				const playerId =
@@ -136,11 +177,7 @@ export default class MediaNotesPlugin extends Plugin {
 					"";
 				const player = this.players[playerId];
 				// If a player state object exists for this media link, don't re-render
-				if (
-					player &&
-					player.mediaLink ===
-						getMediaLinkFromFrontmatter(frontmatter)
-				) {
+				if (player && player.mediaLink === mediaLink) {
 					return;
 				}
 				// remove the existing player
@@ -155,7 +192,7 @@ export default class MediaNotesPlugin extends Plugin {
 				Math.random().toString(36).substring(2, 15);
 
 			div.className = mediaNotesContainerClass;
-			// name is important - matches data-player-id in getActiveViewYoutubePlayer
+			// name is important - matches data-player-id in getActiveViewPlayer
 			div.dataset.playerId = uniqueId;
 			div.style.background = this.settings.backgroundColor;
 			const markdownSourceview = container.querySelector(
@@ -172,32 +209,30 @@ export default class MediaNotesPlugin extends Plugin {
 			if (!markdownSourceview) return;
 			markdownSourceview.prepend(div);
 
-			const mediaLink = getMediaLinkFromFrontmatter(frontmatter);
 			const ytRef = React.createRef<YouTube>();
+			const htmlMediaRef = React.createRef<HTMLMediaElement>();
 			const eventEmitter = new EventEmitter();
 			this.players[uniqueId] = {
 				ytRef,
-				mediaLink: mediaLink,
+				htmlMediaRef,
+				mediaKind,
+				mediaLink,
 				eventEmitter,
 			};
 
-			const mediaId = getVideoId(mediaLink);
+			const mediaId = getMediaId(mediaLink);
 			const mediaData =
 				(mediaId && this.settings.mediaData[mediaId]) ||
 				this.settings.mediaData[mediaLink];
 
-			// extract the url param ts from the media link
-			const mediaLinkUrl = new URL(mediaLink);
-			const mediaLinkParams = new URLSearchParams(mediaLinkUrl.search);
-			const mediaLinkTs = mediaLinkParams.get("t");
+			// extract ?t= / #t= from the media link (works for paths and URLs)
+			const linkTime = getInitSecondsFromLink(mediaLink);
 			const initSeconds =
-				mediaData?.lastTimestampSeconds ?? mediaLinkTs ?? 0;
+				mediaData?.lastTimestampSeconds ?? linkTime.seconds ?? 0;
 
-			let autoplay = false;
 			// If the initial seconds came from the mediaLink, autoplay
-			if (mediaLinkTs && Number(initSeconds) === Number(mediaLinkTs)) {
-				autoplay = true;
-			}
+			const autoplay = linkTime.fromLink &&
+				mediaData?.lastTimestampSeconds === undefined;
 
 			const root = createRoot(div);
 			root.render(
@@ -207,8 +242,11 @@ export default class MediaNotesPlugin extends Plugin {
 						eventEmitter={eventEmitter}
 					>
 						<MediaFrame
-							mediaLink={String(mediaLink)}
+							mediaLink={mediaLink}
+							mediaKind={mediaKind}
 							ytRef={ytRef}
+							htmlMediaRef={htmlMediaRef}
+							src={src}
 							initSeconds={Math.round(initSeconds)}
 							autoplay={autoplay}
 						/>
@@ -233,11 +271,13 @@ export default class MediaNotesPlugin extends Plugin {
 	handleTimestampClick = (timestamp: string): boolean | undefined => {
 		const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
 		if (!activeView) return;
-		const player = this.getActiveViewYoutubePlayer(activeView);
-		if (!player || !player.ytRef) return;
+		const player = this.getActiveViewPlayer(activeView);
+		if (!player) return;
+		const controller = this.getController(player);
+		if (!controller) return;
 
 		const seconds = convertTimestampToSeconds(timestamp);
-		player.ytRef.current?.getInternalPlayer()?.seekTo(seconds, true);
+		controller.seekTo(seconds);
 		player.eventEmitter.emit("handleAction", {
 			type: "timestampClick",
 		});
@@ -266,27 +306,26 @@ export default class MediaNotesPlugin extends Plugin {
 			id: "insert-media-timestamp",
 			name: "Insert Timestamp",
 			editorCallback: async (editor: Editor, view: MarkdownView) => {
-				const player = this.getActiveViewYoutubePlayer(view);
-				if (!player || !player.ytRef) return;
-				const timestamp =
-					await player.ytRef.current?.internalPlayer?.getCurrentTime();
-				if (!timestamp) return;
-				
+				const player = this.getActiveViewPlayer(view);
+				if (!player) return;
+				const controller = this.getController(player);
+				if (!controller) return;
+				const currentTime = await controller.getCurrentTime();
+				const timestamp = Math.max(
+					0,
+					currentTime - this.settings.timestampOffsetSeconds
+				);
+
 				const formattedTimestamp = formatTimestamp(timestamp);
 				const timestampSnippet = formattedTimestamp.replace(/\\n/g, "\n");
 
 				editor.replaceSelection(timestampSnippet);
 				if (this.settings.pauseOnTimestampInsert) {
-					const player = this.getActiveViewYoutubePlayer(view);
-					if (!player || !player.ytRef) return;
-					const playerState =
-						await player.ytRef.current?.internalPlayer?.getPlayerState();
-					if (playerState === YouTube.PlayerState.PLAYING) {
-						player.ytRef.current?.getInternalPlayer()?.pauseVideo();
+					if (await controller.isPlaying()) {
+						controller.pause();
 						player.eventEmitter.emit("handleAction", {
 							type: "pause",
 						});
-						return;
 					}
 				}
 			},
@@ -296,18 +335,18 @@ export default class MediaNotesPlugin extends Plugin {
 			id: "toggle-play-pause",
 			name: "Play/Pause",
 			editorCallback: async (_editor: Editor, view: MarkdownView) => {
-				const player = this.getActiveViewYoutubePlayer(view);
-				if (!player || !player.ytRef) return;
-				const playerState =
-					await player.ytRef.current?.internalPlayer?.getPlayerState();
-				if (playerState === YouTube.PlayerState.PLAYING) {
-					player.ytRef.current?.getInternalPlayer()?.pauseVideo();
+				const player = this.getActiveViewPlayer(view);
+				if (!player) return;
+				const controller = this.getController(player);
+				if (!controller) return;
+				if (await controller.isPlaying()) {
+					controller.pause();
 					player.eventEmitter.emit("handleAction", {
 						type: "pause",
 					});
 					return;
 				}
-				player.ytRef.current?.getInternalPlayer()?.playVideo();
+				controller.play();
 				player.eventEmitter.emit("handleAction", {
 					type: "play",
 				});
@@ -318,8 +357,7 @@ export default class MediaNotesPlugin extends Plugin {
 			id: "toggle-horizontal-view",
 			name: "Toggle horizontal/vertical split",
 			editorCallback: async (editor: Editor, view: MarkdownView) => {
-				const player = this.getActiveViewYoutubePlayer(view);
-				if (!player || !player.ytRef) return;
+				if (!this.getActiveViewPlayer(view)) return;
 				console.log("toggle horizontal view");
 				const container = view.containerEl;
 				const existingPlayer = view.containerEl.querySelector(
@@ -353,15 +391,12 @@ export default class MediaNotesPlugin extends Plugin {
 			id: "seek-forward",
 			name: "Fast Forward",
 			editorCallback: async (editor: Editor, view: MarkdownView) => {
-				const player = this.getActiveViewYoutubePlayer(view);
-				if (!player || !player.ytRef) return;
-				const currentTime =
-					await player.ytRef.current?.internalPlayer?.getCurrentTime();
-				if (!currentTime) return;
-				const newTime = currentTime + this.settings.seekSeconds;
-				player.ytRef.current
-					?.getInternalPlayer()
-					?.seekTo(newTime, true);
+				const player = this.getActiveViewPlayer(view);
+				if (!player) return;
+				const controller = this.getController(player);
+				if (!controller) return;
+				const currentTime = await controller.getCurrentTime();
+				controller.seekTo(currentTime + this.settings.seekSeconds);
 				player.eventEmitter.emit("handleAction", {
 					type: "seekForward",
 				});
@@ -372,24 +407,24 @@ export default class MediaNotesPlugin extends Plugin {
 			id: "seek-backwards",
 			name: "Rewind",
 			editorCallback: async (editor: Editor, view: MarkdownView) => {
-				const player = this.getActiveViewYoutubePlayer(view);
-				if (!player || !player.ytRef) return;
-				const currentTime =
-					await player.ytRef.current?.internalPlayer?.getCurrentTime();
-				if (!currentTime) return;
-				const newTime = currentTime - this.settings.seekSeconds;
-				player.ytRef.current
-					?.getInternalPlayer()
-					?.seekTo(newTime, true);
+				const player = this.getActiveViewPlayer(view);
+				if (!player) return;
+				const controller = this.getController(player);
+				if (!controller) return;
+				const currentTime = await controller.getCurrentTime();
+				controller.seekTo(
+					Math.max(0, currentTime - this.settings.seekSeconds)
+				);
 				player.eventEmitter.emit("handleAction", {
 					type: "seekBackwards",
 				});
-				// player.ytRef.current?.getInternalPlayer()?.showVideoInfo();
-				// TODO: this isn't working - don't think i can simulate a mousemove to the iframe
-				const existingPlayer = view.containerEl.querySelector(
-					".media-notes-container .youtube-iframe"
-				);
-				existingPlayer?.dispatchEvent(new Event("mousemove"));
+				// YouTube hides its controls unless the iframe sees a mousemove.
+				if (player.mediaKind === "youtube") {
+					const existingPlayer = view.containerEl.querySelector(
+						".media-notes-container .youtube-iframe"
+					);
+					existingPlayer?.dispatchEvent(new Event("mousemove"));
+				}
 			},
 		});
 
@@ -397,21 +432,19 @@ export default class MediaNotesPlugin extends Plugin {
 			id: "speed-up",
 			name: "Speed up",
 			editorCallback: async (editor: Editor, view: MarkdownView) => {
-				const player = this.getActiveViewYoutubePlayer(view);
-				if (!player || !player.ytRef) return;
-				const internalPlayer =
-					player.ytRef.current?.getInternalPlayer();
-				if (!internalPlayer) return;
-				const playbackRates =
-					await internalPlayer.getAvailablePlaybackRates();
-				const currentRate = await internalPlayer.getPlaybackRate();
+				const player = this.getActiveViewPlayer(view);
+				if (!player) return;
+				const controller = this.getController(player);
+				if (!controller) return;
+				const playbackRates = await controller.getPlaybackRates();
+				const currentRate = await controller.getPlaybackRate();
 				const currentRateIndex = playbackRates.indexOf(currentRate);
 				const nextRateIndex =
 					currentRateIndex + 1 < playbackRates.length
 						? currentRateIndex + 1
 						: currentRateIndex;
 				const nextRate = playbackRates[nextRateIndex];
-				internalPlayer.setPlaybackRate(nextRate);
+				controller.setPlaybackRate(nextRate);
 				player.eventEmitter.emit("handleAction", {
 					type: "setSpeed",
 					speed: nextRate,
@@ -423,19 +456,17 @@ export default class MediaNotesPlugin extends Plugin {
 			id: "slow-down",
 			name: "Slow down",
 			editorCallback: async (editor: Editor, view: MarkdownView) => {
-				const player = this.getActiveViewYoutubePlayer(view);
-				if (!player || !player.ytRef) return;
-				const internalPlayer =
-					player.ytRef.current?.getInternalPlayer();
-				if (!internalPlayer) return;
-				const playbackRates =
-					await internalPlayer.getAvailablePlaybackRates();
-				const currentRate = await internalPlayer.getPlaybackRate();
+				const player = this.getActiveViewPlayer(view);
+				if (!player) return;
+				const controller = this.getController(player);
+				if (!controller) return;
+				const playbackRates = await controller.getPlaybackRates();
+				const currentRate = await controller.getPlaybackRate();
 				const currentRateIndex = playbackRates.indexOf(currentRate);
 				const nextRateIndex =
 					currentRateIndex - 1 >= 0 ? currentRateIndex - 1 : 0;
 				const nextRate = playbackRates[nextRateIndex];
-				internalPlayer.setPlaybackRate(nextRate);
+				controller.setPlaybackRate(nextRate);
 				player.eventEmitter.emit("handleAction", {
 					type: "setSpeed",
 					speed: nextRate,
@@ -470,7 +501,11 @@ export default class MediaNotesPlugin extends Plugin {
 					const markdownView =
 						this.app.workspace.getActiveViewOfType(MarkdownView);
 					if (!markdownView) return;
-					this.renderPlayerInView(markdownView);
+					try {
+						this.renderPlayerInView(markdownView);
+					} catch (e) {
+						console.error(e);
+					}
 				}
 			})
 		);
